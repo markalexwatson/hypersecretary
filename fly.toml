@@ -1,0 +1,33 @@
+app = 'hypersecretary'
+primary_region = 'lhr'
+
+[build]
+
+[env]
+  CLAUDE_MODEL = 'claude-sonnet-4-20250514'
+  GEMINI_MODEL = 'gemini-2.5-flash'
+  WEBHOOK_PORT = '8080'
+
+# HTTP service — needed so Fly routes webhook traffic and keeps the machine alive
+[[services]]
+  internal_port = 8080
+  protocol = 'tcp'
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.http_checks]]
+    interval = 30000
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = 256

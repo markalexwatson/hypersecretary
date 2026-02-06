@@ -1,0 +1,12 @@
+.env
+data/
+__pycache__/
+*.pyc
+venv/
+node_modules/
+
+# Personal config — keep these local, commit the .example versions
+system_prompt.md
+context/priorities.md
+.env.swp
+*.swp
