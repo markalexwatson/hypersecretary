@@ -140,12 +140,23 @@ fly secrets set WEBHOOK_SECRET=your-generated-secret
 ```bash
 cd email-worker
 npm install
+
+# Set the worker's secrets
 npx wrangler secret put WEBHOOK_URL
-# → enter: https://hypersecretary.fly.dev/webhook/email
+# → enter: https://your-app-name.fly.dev/webhook/email
+
 npx wrangler secret put WEBHOOK_SECRET
-# → enter: the same secret from step 1
+# → enter: the EXACT same value you set on Fly in step 2
+
+# Deploy the worker
 npx wrangler deploy
+
+# Verify secrets are set
+npx wrangler secret list
+# Should show WEBHOOK_URL and WEBHOOK_SECRET
 ```
+
+**Important:** The `WEBHOOK_SECRET` must be identical on both Fly and the Cloudflare Worker. If emails are being "Dropped" in Cloudflare's Email Routing dashboard, mismatched secrets are the most likely cause.
 
 ### 4. Connect it to your email address in Cloudflare
 
