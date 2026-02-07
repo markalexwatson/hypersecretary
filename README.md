@@ -8,14 +8,14 @@ A Telegram bot that routes messages to Gemini Flash (fast/cheap) or Claude (deep
 # 1. Clone / copy these files to your machine
 
 # 2. Install dependencies
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
 # 3. Set up your keys
 cp .env.example .env
 # Edit .env with your actual tokens (see below)
 
 # 4. Run
-python bot.py
+python3 bot.py
 ```
 
 ## Getting your tokens
@@ -187,7 +187,7 @@ The bot has a generic webhook at `POST /webhook/notify` that accepts any notific
 ### Webhook format
 
 ```json
-POST https://hypersecretary.fly.dev/webhook/notify
+POST https://your-app-name.fly.dev/webhook/notify
 Header: X-Webhook-Secret: your-secret
 
 {
@@ -206,7 +206,7 @@ Only `title` is required. `type` defaults to "other", `notify` defaults to true.
 
 1. Create a Zap with your trigger (Gmail, Google Calendar, Stripe, etc.)
 2. Add action: **Webhooks by Zapier → POST**
-3. URL: `https://hypersecretary.fly.dev/webhook/notify`
+3. URL: `https://your-app-name.fly.dev/webhook/notify`
 4. Headers: `X-Webhook-Secret: your-secret`
 5. Data: Map fields from the trigger to the JSON format above
 
@@ -244,34 +244,14 @@ Only `title` is required. `type` defaults to "other", `notify` defaults to true.
 }
 ```
 
-**Bluesky → mentions or replies:**
-```json
-{
-  "type": "bluesky",
-  "source": "{{Author Handle}}",
-  "title": "{{Author Handle}} replied to your post",
-  "body": "{{Post Text}}",
-  "metadata": {"uri": "{{Post URI}}"}
-}
-```
-
-**Mastodon → mentions or boosts:**
-```json
-{
-  "type": "mastodon",
-  "source": "{{Account Name}}",
-  "title": "{{Account Name}} mentioned you",
-  "body": "{{Status Content}}",
-  "metadata": {"url": "{{Status URL}}"}
-}
-```
-
 Set `"notify": false` for high-volume feeds — items are stored but won't ping your phone. You can still see them with `/inbox news` or `/ask any interesting news today?`
+
+**Note:** Mastodon and Bluesky don't have Zapier/IFTTT notification triggers. Use the [social notification poller](#social-notifications-mastodon--bluesky) instead.
 
 ### Testing the webhook
 
 ```bash
-curl -X POST https://hypersecretary.fly.dev/webhook/notify \
+curl -X POST https://your-app-name.fly.dev/webhook/notify \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: your-secret" \
   -d '{"type":"alert","source":"test","title":"Hello from curl"}'
@@ -435,30 +415,45 @@ Neither platform supports outbound webhooks for notifications, so the bot includ
 4. Save, then copy the access token
 
 **Bluesky:**
-1. Go to Settings → App Passwords → Add App Password
+1. Go to Settings → Privacy and Security → App Passwords → Add App Password
 2. Name it anything, copy the generated password
 
 ### 2. Run locally (one-off test)
 
 ```bash
-export WEBHOOK_URL=https://hypersecretary.fly.dev
+export WEBHOOK_URL=https://your-app-name.fly.dev
 export WEBHOOK_SECRET=your-secret
 export MASTODON_INSTANCE=https://mastodon.social
 export MASTODON_TOKEN=your-token
 export BLUESKY_HANDLE=yourname.bsky.social
 export BLUESKY_PASSWORD=your-app-password
 
-pip install requests python-dotenv
-python social_poller.py
+pip3 install requests python-dotenv
+python3 social_poller.py
 ```
 
 ### 3. Run on a schedule (GitHub Actions, free)
 
-Push the repo to a **private** GitHub repo (to keep secrets safe), then add these secrets in Settings → Secrets and variables → Actions:
+The poller needs secrets (API tokens, webhook credentials), so it must run from a **separate private repo** — not from the public hypersecretary repo.
+
+```bash
+mkdir hypersecretary-poller
+cp social_poller.py hypersecretary-poller/
+mkdir -p hypersecretary-poller/.github/workflows
+cp social_poll.yml hypersecretary-poller/.github/workflows/
+
+cd hypersecretary-poller
+git init
+git add .
+git commit -m "Social notification poller"
+gh repo create hypersecretary-poller --private --source=. --push
+```
+
+Then add these as **repository secrets** in the private repo's Settings → Secrets and variables → Actions → New repository secret:
 
 | Secret | Value |
 |---|---|
-| `WEBHOOK_URL` | `https://hypersecretary.fly.dev` |
+| `WEBHOOK_URL` | `https://your-app-name.fly.dev` |
 | `WEBHOOK_SECRET` | your webhook secret |
 | `MASTODON_INSTANCE` | `https://mastodon.social` (or your instance) |
 | `MASTODON_TOKEN` | your Mastodon access token |
