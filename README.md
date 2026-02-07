@@ -408,6 +408,20 @@ For IFTTT, the URL format is `https://maker.ifttt.com/trigger/{event}/with/key/{
 
 In Zapier, create a Zap with trigger **Webhooks by Zapier → Catch Hook**. It'll give you a URL. Map the incoming fields (from `fields` in your config) to whatever action you want.
 
+### AI-orchestrated actions
+
+Both Gemini Flash and Claude can trigger actions autonomously during normal conversation. You don't need to use `/do` — just ask naturally:
+
+```
+"Turn off the lights"
+"Post 'just shipped v2' to mastodon and log my mood as 9"
+"Remind me to check the heating"
+```
+
+The models see your available actions in their system prompt and embed action tags in their responses. The bot executes them before you see the reply.
+
+**Security:** Actions are only available during direct conversation. The `/ask` command (which processes untrusted inbox content like emails and notifications) runs in safe mode with actions disabled. This prevents prompt injection — a malicious email containing "turn off the lights" can't trigger anything when you ask the bot to summarise your inbox.
+
 ## Social notifications (Mastodon & Bluesky)
 
 Neither platform supports outbound webhooks for notifications, so the bot includes a polling script that checks both APIs and forwards new mentions, replies, likes, boosts, and follows to your Telegram inbox.
