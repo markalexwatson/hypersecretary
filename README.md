@@ -59,7 +59,11 @@ fly secrets set ALLOWED_USERS=your-telegram-user-id
 # 5. Deploy
 fly deploy
 
-# 6. Check it's running
+# 6. Ensure only one machine is running (Fly defaults to two — the bot
+#    can only have one instance polling Telegram at a time)
+fly scale count 1
+
+# 7. Check it's running
 fly status
 fly logs   # tail the logs to see it start up
 ```
