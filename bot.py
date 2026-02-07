@@ -72,6 +72,8 @@ ICONS = {
     "news":     "📰",
     "deploy":   "🚀",
     "reminder": "⏰",
+    "bluesky":  "🦋",
+    "mastodon": "🐘",
     "other":    "📌",
 }
 

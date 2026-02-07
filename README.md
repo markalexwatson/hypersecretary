@@ -104,7 +104,7 @@ fly apps restart      # restart if something's stuck
 
 Notifications are categorised by type, each with its own icon:
 
-📧 email · 📅 calendar · 🚨 alert · ✅ task · 💰 payment · 📰 news · 🚀 deploy · ⏰ reminder · 📌 other
+📧 email · 📅 calendar · 🚨 alert · ✅ task · 💰 payment · 📰 news · 🚀 deploy · ⏰ reminder · 🦋 bluesky · 🐘 mastodon · 📌 other
 
 ## Adding context
 
@@ -239,6 +239,28 @@ Only `title` is required. `type` defaults to "other", `notify` defaults to true.
   "title": "{{Entry Title}}",
   "body": "{{Entry Summary}}",
   "notify": false
+}
+```
+
+**Bluesky → mentions or replies:**
+```json
+{
+  "type": "bluesky",
+  "source": "{{Author Handle}}",
+  "title": "{{Author Handle}} replied to your post",
+  "body": "{{Post Text}}",
+  "metadata": {"uri": "{{Post URI}}"}
+}
+```
+
+**Mastodon → mentions or boosts:**
+```json
+{
+  "type": "mastodon",
+  "source": "{{Account Name}}",
+  "title": "{{Account Name}} mentioned you",
+  "body": "{{Status Content}}",
+  "metadata": {"url": "{{Status URL}}"}
 }
 ```
 
