@@ -1,0 +1,35 @@
+{
+  "lights_off": {
+    "url": "https://maker.ifttt.com/trigger/lights_off/with/key/YOUR_IFTTT_KEY",
+    "description": "Turn off living room lights"
+  },
+  "lights_on": {
+    "url": "https://maker.ifttt.com/trigger/lights_on/with/key/YOUR_IFTTT_KEY",
+    "description": "Turn on living room lights"
+  },
+  "tweet": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/abcdef/",
+    "description": "Post to Twitter/X",
+    "fields": ["status"]
+  },
+  "toot": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/ghijkl/",
+    "description": "Post to Mastodon",
+    "fields": ["status"]
+  },
+  "log_mood": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/mnopqr/",
+    "description": "Log mood score to spreadsheet",
+    "fields": ["score", "note"]
+  },
+  "remind": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/stuvwx/",
+    "description": "Create a reminder in Todoist",
+    "fields": ["task"]
+  },
+  "note": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/yzabcd/",
+    "description": "Append to daily notes in Notion",
+    "fields": ["text"]
+  }
+}

@@ -96,6 +96,8 @@ fly apps restart      # restart if something's stuck
 | `/inbox calendar` | Show only calendar events |
 | `/search <keyword>` | Search inbox by keyword |
 | `/ask <question>` | Ask Flash a question about your inbox |
+| `/do <action> [args]` | Trigger an outbound action |
+| `/actions` | List available actions |
 | `/clear` | Resets conversation history |
 | `/status` | Shows models, inbox counts |
 | `/help` | Shows commands |
@@ -343,6 +345,125 @@ You can make this more sophisticated by calling external APIs (Google Calendar, 
 
 Add an async background task to `bot.py` that runs on a schedule using `asyncio`. This can directly query the inbox, call Flash, and send the result to Telegram — a fully automated briefing with no manual prompt needed. This is the most powerful option but means more code to maintain.
 
+## Outbound actions
+
+The bot can trigger external webhooks (Zapier, IFTTT, anything) via the `/do` command. This turns your Telegram into a remote control for anything with a webhook URL.
+
+### Setup
+
+Copy the example and add your own actions:
+
+```bash
+cp actions.example.json actions.json
+```
+
+Edit `actions.json` with your webhook URLs:
+
+```json
+{
+  "lights_off": {
+    "url": "https://maker.ifttt.com/trigger/lights_off/with/key/YOUR_KEY",
+    "description": "Turn off living room lights"
+  },
+  "tweet": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/abcdef/",
+    "description": "Post to Twitter/X",
+    "fields": ["status"]
+  },
+  "log_mood": {
+    "url": "https://hooks.zapier.com/hooks/catch/123456/ghijkl/",
+    "description": "Log mood score to spreadsheet",
+    "fields": ["score", "note"]
+  }
+}
+```
+
+Redeploy after editing: `fly deploy`
+
+### Usage in Telegram
+
+```
+/actions              → list what's available
+/do lights_off        → no args needed
+/do tweet Just shipped the new feature!
+/do log_mood 8 great day, got the bot working
+```
+
+### Config options
+
+| Field | Required | Description |
+|---|---|---|
+| `url` | yes | Webhook URL |
+| `description` | no | Shown in `/actions` list |
+| `fields` | no | Named args, split by spaces. Last field gets the remainder |
+| `method` | no | HTTP method, default `POST` |
+| `headers` | no | Extra headers as `{"key": "value"}` |
+| `body_template` | no | Static JSON merged with args |
+
+### IFTTT Maker Webhooks
+
+For IFTTT, the URL format is `https://maker.ifttt.com/trigger/{event}/with/key/{key}`. If you don't specify `fields`, any args are automatically mapped to `value1`, `value2`, `value3` (IFTTT's convention).
+
+### Zapier Webhooks
+
+In Zapier, create a Zap with trigger **Webhooks by Zapier → Catch Hook**. It'll give you a URL. Map the incoming fields (from `fields` in your config) to whatever action you want.
+
+## Social notifications (Mastodon & Bluesky)
+
+Neither platform supports outbound webhooks for notifications, so the bot includes a polling script that checks both APIs and forwards new mentions, replies, likes, boosts, and follows to your Telegram inbox.
+
+### 1. Get your credentials
+
+**Mastodon:**
+1. Go to your instance's web UI → Preferences → Development → New Application
+2. Name it anything (e.g. "hypersecretary")
+3. Uncheck everything except `read:notifications`
+4. Save, then copy the access token
+
+**Bluesky:**
+1. Go to Settings → App Passwords → Add App Password
+2. Name it anything, copy the generated password
+
+### 2. Run locally (one-off test)
+
+```bash
+export WEBHOOK_URL=https://hypersecretary.fly.dev
+export WEBHOOK_SECRET=your-secret
+export MASTODON_INSTANCE=https://mastodon.social
+export MASTODON_TOKEN=your-token
+export BLUESKY_HANDLE=yourname.bsky.social
+export BLUESKY_PASSWORD=your-app-password
+
+pip install requests python-dotenv
+python social_poller.py
+```
+
+### 3. Run on a schedule (GitHub Actions, free)
+
+Push the repo to a **private** GitHub repo (to keep secrets safe), then add these secrets in Settings → Secrets and variables → Actions:
+
+| Secret | Value |
+|---|---|
+| `WEBHOOK_URL` | `https://hypersecretary.fly.dev` |
+| `WEBHOOK_SECRET` | your webhook secret |
+| `MASTODON_INSTANCE` | `https://mastodon.social` (or your instance) |
+| `MASTODON_TOKEN` | your Mastodon access token |
+| `BLUESKY_HANDLE` | `yourname.bsky.social` |
+| `BLUESKY_PASSWORD` | your Bluesky app password |
+
+The included workflow (`.github/workflows/social_poll.yml`) runs every 5 minutes and uses GitHub Actions cache to remember which notifications it has already forwarded. Either platform can be left unconfigured — the poller will skip it.
+
+### What you'll see in Telegram
+
+```
+🐘 @someone@mastodon.social mentioned you
+🐘 @someone@mastodon.social boosted your post
+🦋 @someone.bsky.social replied to you
+🦋 @someone.bsky.social liked your post
+```
+
+Use `/inbox mastodon` or `/inbox bluesky` to filter, or `/ask any interesting social activity today?` for a summary.
+
 ## Architecture
 
 ```
@@ -353,6 +474,7 @@ You (Telegram) → Bot (Fly.io) → Gemini Flash API  (default)
 
 Cloudflare Email Worker → POST /webhook/email → inbox (type: email)
 Zapier / scripts / anything → POST /webhook/notify → inbox (any type)
+GitHub Actions (cron) → social_poller.py → POST /webhook/notify → inbox (mastodon/bluesky)
 ```
 
-~450 lines of Python + a small Cloudflare Worker. Hosting cost: £0.
+~500 lines of Python + a small Cloudflare Worker + a polling script. Hosting cost: £0.

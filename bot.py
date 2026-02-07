@@ -22,6 +22,7 @@ import os
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,7 @@ from telegram.ext import Application, MessageHandler, CommandHandler, filters, C
 
 import anthropic
 from google import genai
-from aiohttp import web
+from aiohttp import web, ClientSession
 
 # ---------------------------------------------------------------------------
 # Config
@@ -55,6 +56,7 @@ WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8080"))
 
 CONTEXT_DIR = Path(__file__).parent / "context"
 DB_PATH = Path(__file__).parent / "data" / "inbox.db"
+ACTIONS_FILE = Path(__file__).parent / "actions.json"
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger("hypersecretary")
@@ -211,6 +213,144 @@ def load_system_prompt() -> str:
 SYSTEM_PROMPT = load_system_prompt()
 
 # ---------------------------------------------------------------------------
+# Outbound actions (Zapier, IFTTT, etc.)
+# ---------------------------------------------------------------------------
+
+def load_actions() -> dict:
+    """Load action definitions from actions.json.
+
+    Format:
+    {
+      "action_name": {
+        "url": "https://hooks.zapier.com/hooks/catch/...",
+        "description": "What this action does",
+        "method": "POST",           // optional, default POST
+        "fields": ["field1"],       // optional, named args
+        "headers": {"key": "val"},  // optional extra headers
+        "body_template": {}         // optional, static JSON merged with args
+      }
+    }
+    """
+    if not ACTIONS_FILE.exists():
+        return {}
+    try:
+        return json.loads(ACTIONS_FILE.read_text())
+    except Exception as e:
+        log.error(f"Failed to load actions.json: {e}")
+        return {}
+
+
+ACTIONS = load_actions()
+log.info(f"Loaded {len(ACTIONS)} action(s)") if ACTIONS else None
+
+
+def build_actions_prompt() -> str:
+    """Generate the actions section for the system prompt."""
+    if not ACTIONS:
+        return ""
+
+    lines = [
+        "\n\n---\n\n## Available Actions\n",
+        "You can trigger real-world actions by including action tags in your response.",
+        "Use this format: [ACTION: action_name arg1 arg2 ...]",
+        "You may include multiple actions in one response.",
+        "Write your conversational response around the tags — the tags will be replaced with results before the user sees it.\n",
+        "Actions available:\n",
+    ]
+
+    for name, action in sorted(ACTIONS.items()):
+        desc = action.get("description", "no description")
+        fields = action.get("fields", [])
+        if fields:
+            usage = f"[ACTION: {name} {'<' + '> <'.join(fields) + '>'}]"
+        else:
+            usage = f"[ACTION: {name}]"
+        lines.append(f"- {name}: {desc}")
+        lines.append(f"  Usage: {usage}")
+
+    lines.append("\nExamples:")
+    lines.append('User: "Turn off the lights" → [ACTION: lights_off] Done, lights are off.')
+    lines.append('User: "Post hello world to mastodon" → [ACTION: toot hello world] Posted to Mastodon for you.')
+    lines.append('User: "Log my mood as 8, feeling great" → [ACTION: log_mood 8 feeling great] Logged your mood.')
+    lines.append("\nOnly trigger actions when the user clearly intends it. Don't trigger actions for questions about actions.")
+    lines.append("If an action fails, tell the user what happened.")
+
+    return "\n".join(lines)
+
+
+# Append actions to system prompt
+SYSTEM_PROMPT_WITH_ACTIONS = SYSTEM_PROMPT + build_actions_prompt()
+
+# Pattern to match action tags in model responses
+ACTION_PATTERN = re.compile(r'\[ACTION:\s*(\S+)\s*(.*?)\]')
+
+
+async def process_actions_in_response(text: str) -> str:
+    """Find [ACTION: name args] tags in model output, execute them, replace with results."""
+    matches = list(ACTION_PATTERN.finditer(text))
+    if not matches:
+        return text
+
+    result = text
+    for match in reversed(matches):  # reverse so replacements don't shift indices
+        action_name = match.group(1).lower()
+        action_args = match.group(2).strip()
+
+        log.info(f"  🔧 Executing action: {action_name} {action_args[:80]}")
+        action_result = await execute_action(action_name, action_args)
+        result = result[:match.start()] + action_result + result[match.end():]
+
+    return result
+
+
+async def execute_action(name: str, args: str) -> str:
+    """Fire an outbound webhook for a named action. Returns status message."""
+    action = ACTIONS.get(name)
+    if not action:
+        available = ", ".join(sorted(ACTIONS.keys())) or "(none configured)"
+        return f"❌ Unknown action '{name}'.\nAvailable: {available}"
+
+    url = action["url"]
+    method = action.get("method", "POST").upper()
+    extra_headers = action.get("headers", {})
+    fields = action.get("fields", [])
+    body_template = action.get("body_template", {})
+
+    # Build the payload
+    payload = dict(body_template)
+
+    if fields and args:
+        # Split args by spaces, matching to field names
+        parts = args.split(None, len(fields) - 1) if len(fields) > 1 else [args]
+        for i, field_name in enumerate(fields):
+            if i < len(parts):
+                payload[field_name] = parts[i]
+    elif args:
+        # No named fields — send everything as "value"
+        payload["value"] = args
+
+    # For IFTTT Maker webhooks, map to value1/value2/value3
+    if "maker.ifttt.com" in url and not fields:
+        parts = args.split(None, 2) if args else []
+        for i, part in enumerate(parts):
+            payload[f"value{i+1}"] = part
+
+    headers = {"Content-Type": "application/json"}
+    headers.update(extra_headers)
+
+    try:
+        async with ClientSession() as session:
+            async with session.request(method, url, json=payload, headers=headers, timeout=15) as resp:
+                status = resp.status
+                if 200 <= status < 300:
+                    return f"✅ {action.get('description', name)} — done"
+                else:
+                    body = await resp.text()
+                    return f"⚠️ {name} returned {status}: {body[:200]}"
+    except Exception as e:
+        return f"❌ {name} failed: {e}"
+
+# ---------------------------------------------------------------------------
 # API clients
 # ---------------------------------------------------------------------------
 
@@ -243,17 +383,21 @@ def clear_history(user_id: int):
 # Model calls
 # ---------------------------------------------------------------------------
 
-async def call_claude(user_message: str, user_id: int) -> str:
+async def call_claude(user_message: str, user_id: int, safe: bool = False) -> str:
+    """Call Claude. If safe=True, actions are disabled (for untrusted content like inbox)."""
     messages = get_history(user_id) + [{"role": "user", "content": user_message}]
+    prompt = SYSTEM_PROMPT if safe else SYSTEM_PROMPT_WITH_ACTIONS
     try:
         response = await asyncio.to_thread(
             claude_client.messages.create,
             model=CLAUDE_MODEL,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=prompt,
             messages=messages,
         )
         reply = response.content[0].text
+        if not safe:
+            reply = await process_actions_in_response(reply)
         append_history(user_id, "user", user_message)
         append_history(user_id, "assistant", reply)
         return reply
@@ -262,7 +406,8 @@ async def call_claude(user_message: str, user_id: int) -> str:
         return f"⚠️ Claude error: {e}"
 
 
-async def call_gemini(user_message: str, user_id: int) -> str:
+async def call_gemini(user_message: str, user_id: int, safe: bool = False) -> str:
+    """Call Gemini Flash. If safe=True, actions are disabled (for untrusted content like inbox)."""
     h = get_history(user_id)
     contents = []
     for msg in h:
@@ -270,17 +415,20 @@ async def call_gemini(user_message: str, user_id: int) -> str:
         contents.append({"role": gemini_role, "parts": [{"text": msg["content"]}]})
     contents.append({"role": "user", "parts": [{"text": user_message}]})
 
+    prompt = SYSTEM_PROMPT if safe else SYSTEM_PROMPT_WITH_ACTIONS
     try:
         response = await asyncio.to_thread(
             gemini_client.models.generate_content,
             model=GEMINI_MODEL,
             contents=contents,
             config={
-                "system_instruction": SYSTEM_PROMPT,
+                "system_instruction": prompt,
                 "max_output_tokens": 4096,
             },
         )
         reply = response.text
+        if not safe:
+            reply = await process_actions_in_response(reply)
         append_history(user_id, "user", user_message)
         append_history(user_id, "assistant", reply)
         return reply
@@ -468,8 +616,62 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.chat.send_action("typing")
-    reply = await call_gemini(prompt, update.effective_user.id)
+    reply = await call_gemini(prompt, update.effective_user.id, safe=True)
     await send_reply(update.message, reply, "🔍 ")
+
+
+async def cmd_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Trigger an outbound action. Usage: /do <action_name> [args]"""
+    if not is_authorised(update):
+        return
+
+    parts = update.message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        if not ACTIONS:
+            await update.message.reply_text("No actions configured. Create an actions.json file.")
+            return
+        # Show available actions
+        lines = ["Usage: /do <action> [args]\n\nAvailable actions:"]
+        for name, action in sorted(ACTIONS.items()):
+            desc = action.get("description", "")
+            fields = action.get("fields", [])
+            field_str = " ".join(f"<{f}>" for f in fields) if fields else "[text]"
+            lines.append(f"  ⚡ /do {name} {field_str}")
+            if desc:
+                lines.append(f"     {desc}")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    action_name = parts[1].lower()
+    args = parts[2] if len(parts) > 2 else ""
+
+    log.info(f"[{update.effective_user.id}] → Action: {action_name} {args[:80]}")
+    await update.message.chat.send_action("typing")
+    result = await execute_action(action_name, args)
+    await update.message.reply_text(result)
+
+
+async def cmd_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available outbound actions."""
+    if not is_authorised(update):
+        return
+
+    if not ACTIONS:
+        await update.message.reply_text(
+            "No actions configured.\n\n"
+            "Create an actions.json file with your webhook URLs. See README for examples."
+        )
+        return
+
+    lines = ["⚡ Available actions:\n"]
+    for name, action in sorted(ACTIONS.items()):
+        desc = action.get("description", "no description")
+        fields = action.get("fields", [])
+        field_str = " ".join(f"<{f}>" for f in fields) if fields else ""
+        lines.append(f"  /do {name} {field_str}")
+        lines.append(f"  └ {desc}\n")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -521,6 +723,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/inbox <type> → Filter ({types_list})\n"
         "/search <keyword> → Search inbox\n"
         "/ask <question> → Ask about your inbox\n\n"
+        "Actions:\n"
+        "/do <action> [args] → Trigger an action\n"
+        "/actions → List available actions\n\n"
         "Other:\n"
         "/clear → Reset conversation history\n"
         "/status → Bot info\n"
@@ -652,6 +857,8 @@ async def main():
     telegram_app.add_handler(CommandHandler("inbox", cmd_inbox))
     telegram_app.add_handler(CommandHandler("search", cmd_search))
     telegram_app.add_handler(CommandHandler("ask", cmd_ask))
+    telegram_app.add_handler(CommandHandler("do", cmd_do))
+    telegram_app.add_handler(CommandHandler("actions", cmd_actions))
     telegram_app.add_handler(CommandHandler("claude", handle_message))
     telegram_app.add_handler(CommandHandler("flash", handle_message))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

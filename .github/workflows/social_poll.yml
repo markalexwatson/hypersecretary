@@ -1,0 +1,44 @@
+name: Poll social notifications
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # every 5 minutes
+  workflow_dispatch:        # manual trigger for testing
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      # Restore last-seen state from previous run
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/social_poller_state.json
+          key: social-poller-state-${{ github.run_id }}
+          restore-keys: social-poller-state-
+
+      - name: Poll Mastodon and Bluesky
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          MASTODON_INSTANCE: ${{ secrets.MASTODON_INSTANCE }}
+          MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_PASSWORD: ${{ secrets.BLUESKY_PASSWORD }}
+        run: python social_poller.py
+
+      # Save state for next run
+      - name: Save state
+        uses: actions/cache/save@v4
+        with:
+          path: data/social_poller_state.json
+          key: social-poller-state-${{ github.run_id }}
